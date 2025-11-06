@@ -4,16 +4,27 @@
 #include <fcntl.h>
 #include <string.h>
 #include <signal.h>
-#include <time.h>
+#include <sys/time.h>
 
 #define DEV_SCULL0 "/dev/scull_ring0"
 #define DEV_SCULL2 "/dev/scull_ring2"
-#define BUFFER_SIZE 512  // Увеличили размер буфера
+#define BUFFER_SIZE 512
 
 volatile sig_atomic_t keep_running = 1;
 
 void signal_handler(int sig) {
     keep_running = 0;
+}
+
+long get_current_time_us() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000000 + tv.tv_usec;
+}
+
+void print_timing_info(const char* process, const char* operation, int message_num, long elapsed_us) {
+    printf("[%ld] %s: %s message %d (took %ld us)\n", 
+           get_current_time_us(), process, operation, message_num, elapsed_us);
 }
 
 int main() {
@@ -22,6 +33,7 @@ int main() {
     char read_buf[BUFFER_SIZE];
     int counter = 1;
     ssize_t n;
+    long start_time, end_time;
 
     signal(SIGINT, signal_handler);
 
@@ -42,26 +54,41 @@ int main() {
            DEV_SCULL0, DEV_SCULL2);
 
     while (keep_running) {
-        // Генерация и запись данных в scull0
-        snprintf(write_buf, BUFFER_SIZE, "P1_DATA_%d", counter);
-        n = write(fd_write, write_buf, strlen(write_buf) + 1);
-        if (n < 0) {
-            perror("P1: Write failed");
-        } else {
-            printf("P1: Wrote to scull0: %s\n", write_buf);
+        // Write to scull0 - VERY FAST (10 messages in burst)
+        for (int i = 0; i < 10 && keep_running; i++) {
+            start_time = get_current_time_us();
+            
+            snprintf(write_buf, BUFFER_SIZE, "P1_DATA_%d_%d", counter, i);
+            n = write(fd_write, write_buf, strlen(write_buf) + 1);
+            
+            end_time = get_current_time_us();
+            
+            if (n < 0) {
+                perror("P1: Write failed");
+            } else {
+                print_timing_info("P1-WRITE", "wrote to scull0", counter * 100 + i, end_time - start_time);
+            }
         }
 
-        // Чтение данных из scull2
-        n = read(fd_read, read_buf, BUFFER_SIZE - 1);
-        if (n < 0) {
-            perror("P1: Read from scull2 failed");
-        } else if (n > 0) {
-            read_buf[n] = '\0';
-            printf("P1: Read from scull2: %s\n", read_buf);
+        // Read from scull2 (occasionally)
+        if (counter % 5 == 0) { // Read only every 5th iteration
+            start_time = get_current_time_us();
+            
+            n = read(fd_read, read_buf, BUFFER_SIZE - 1);
+            
+            end_time = get_current_time_us();
+            
+            if (n < 0) {
+                perror("P1: Read from scull2 failed");
+            } else if (n > 0) {
+                read_buf[n] = '\0';
+                print_timing_info("P1-READ", "read from scull2", counter, end_time - start_time);
+                printf("    Content: %s\n", read_buf);
+            }
         }
 
         counter++;
-        usleep(3000000);
+        usleep(500000); // 0.5 seconds between bursts
     }
 
     printf("P1: Shutting down...\n");

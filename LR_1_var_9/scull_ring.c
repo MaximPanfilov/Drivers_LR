@@ -28,8 +28,8 @@ struct scull_ring_buffer {
     struct mutex lock;
     wait_queue_head_t read_queue;
     wait_queue_head_t write_queue;
-    atomic_t read_count;    // Атомарный счетчик операций чтения
-    atomic_t write_count;   // Атомарный счетчик операций записи
+    atomic_t read_count;
+    atomic_t write_count;
 };
 
 struct scull_ring_dev {
@@ -42,7 +42,6 @@ module_param(scull_ring_major, int, S_IRUGO);
 
 static struct scull_ring_dev scull_ring_devices[SCULL_RING_NR_DEVS];
 
-// IOCTL команды
 #define SCULL_RING_IOCTL_GET_STATUS _IOR('s', 1, int[4])
 #define SCULL_RING_IOCTL_GET_COUNTERS _IOR('s', 2, long[2])
 
@@ -74,7 +73,6 @@ static int scull_ring_buffer_init(struct scull_ring_buffer *buf, int size) {
     init_waitqueue_head(&buf->read_queue);
     init_waitqueue_head(&buf->write_queue);
     
-    // Инициализация атомарных счетчиков
     atomic_set(&buf->read_count, 0);
     atomic_set(&buf->write_count, 0);
     
@@ -130,7 +128,6 @@ static int scull_ring_buffer_read(struct scull_ring_buffer *buf, char __user *us
     buf->data_len -= count;
     bytes_read = count;
 
-    // Атомарное увеличение счетчика чтений
     atomic_inc(&buf->read_count);
     
     wake_up_interruptible(&buf->write_queue);
@@ -183,7 +180,6 @@ static int scull_ring_buffer_write(struct scull_ring_buffer *buf, const char __u
     buf->data_len += count;
     bytes_written = count;
 
-    // Атомарное увеличение счетчика записей
     atomic_inc(&buf->write_count);
     
     wake_up_interruptible(&buf->read_queue);
@@ -217,8 +213,8 @@ static ssize_t scull_ring_write(struct file *filp, const char __user *buf, size_
 static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
     struct scull_ring_dev *dev = filp->private_data;
     struct scull_ring_buffer *buf = dev->ring_buf;
-    int status[4]; // [data_len, size, 0, 0] - резерв для расширения
-    long counters[2]; // [read_count, write_count]
+    int status[4];
+    long counters[2];
 
     switch (cmd) {
         case SCULL_RING_IOCTL_GET_STATUS:
@@ -237,7 +233,6 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
             break;
             
         case SCULL_RING_IOCTL_GET_COUNTERS:
-            // Атомарное чтение счетчиков - не требует блокировки!
             counters[0] = atomic_read(&buf->read_count);
             counters[1] = atomic_read(&buf->write_count);
             
@@ -252,7 +247,6 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
     return 0;
 }
 
-// Остальная часть драйвера (инициализация и очистка) остается без изменений
 static int __init scull_ring_init(void) {
     dev_t dev = 0;
     int err, i;
