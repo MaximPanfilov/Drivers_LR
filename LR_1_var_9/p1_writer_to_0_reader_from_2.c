@@ -8,7 +8,7 @@
 
 #define DEV_SCULL0 "/dev/scull_ring0"
 #define DEV_SCULL2 "/dev/scull_ring2"
-#define BUFFER_SIZE 256
+#define BUFFER_SIZE 512  // Увеличили размер буфера
 
 volatile sig_atomic_t keep_running = 1;
 
@@ -23,7 +23,6 @@ int main() {
     int counter = 1;
     ssize_t n;
 
-    // Установка обработчика сигнала для Ctrl+C
     signal(SIGINT, signal_handler);
 
     fd_write = open(DEV_SCULL0, O_WRONLY);
@@ -52,16 +51,17 @@ int main() {
             printf("P1: Wrote to scull0: %s\n", write_buf);
         }
 
-        // Чтение данных из scull2 (неблокирующее)
-        n = read(fd_read, read_buf, BUFFER_SIZE);
+        // Чтение данных из scull2
+        n = read(fd_read, read_buf, BUFFER_SIZE - 1);
         if (n < 0) {
             perror("P1: Read from scull2 failed");
         } else if (n > 0) {
+            read_buf[n] = '\0';
             printf("P1: Read from scull2: %s\n", read_buf);
         }
 
         counter++;
-        usleep(500000); // 0.5 секунды задержки
+        usleep(3000000);
     }
 
     printf("P1: Shutting down...\n");

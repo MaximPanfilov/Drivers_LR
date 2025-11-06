@@ -8,7 +8,7 @@
 
 #define DEV_SCULL0 "/dev/scull_ring0"
 #define DEV_SCULL1 "/dev/scull_ring1"
-#define BUFFER_SIZE 256
+#define BUFFER_SIZE 512  // Увеличили размер буфера
 
 volatile sig_atomic_t keep_running = 1;
 
@@ -43,14 +43,19 @@ int main() {
 
     while (keep_running) {
         // Чтение данных из scull0
-        n = read(fd_read, read_buf, BUFFER_SIZE);
+        n = read(fd_read, read_buf, BUFFER_SIZE - 1); // Оставляем место для нуль-терминатора
         if (n < 0) {
             perror("P2: Read from scull0 failed");
         } else if (n > 0) {
+            read_buf[n] = '\0'; // Добавляем нуль-терминатор
             printf("P2: Read from scull0: %s\n", read_buf);
 
-            // Обработка и запись в scull1
-            snprintf(write_buf, BUFFER_SIZE, "P2_PROCESSED_%d_%s", counter, read_buf);
+            // Обработка и запись в scull1 с проверкой длины
+            int written = snprintf(write_buf, BUFFER_SIZE, "P2_PROCESSED_%d_%s", counter, read_buf);
+            if (written >= BUFFER_SIZE) {
+                printf("P2: Warning: message truncated\n");
+            }
+            
             n = write(fd_write, write_buf, strlen(write_buf) + 1);
             if (n < 0) {
                 perror("P2: Write to scull1 failed");
@@ -60,7 +65,7 @@ int main() {
             counter++;
         }
 
-        usleep(500000);
+        usleep(2000000);
     }
 
     printf("P2: Shutting down...\n");

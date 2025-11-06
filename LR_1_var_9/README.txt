@@ -2,10 +2,36 @@
 For drivers course LR's
 Лабораторная работа №1 Skull драйвер.
 
-[LAUNCH:]
-Сделайте скрипт исполняемым: 
-Запустите: 
+----[LAUNCH:]----
+1. make
 
+2. ./load_driver.sh
+
+3. compile:
+gcc -o p1 p1_writer_to_0_reader_from_2.c
+gcc -o p2 p2_reader_from_0_writer_to_1.c  
+gcc -o p3 p3_reader_from_1_writer_to_2.c
+gcc -o p4 p4_monitor_all.c
+
+4.
+# Терминал 1
+./p1
+
+# Терминал 2  
+./p2
+
+# Терминал 3
+./p3
+
+# Терминал 4
+./p4
+
+----[QUIT:]----
+ctrl + c 
+OR 
+pkill -f "p1"
+
+./unload_driver.sh
 
 ///////////////////////////////////////////////////////
 Лабораторная работа №1 Scull-драйвер с блокировками
