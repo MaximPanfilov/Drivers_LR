@@ -83,10 +83,26 @@ static void scull_ring_buffer_cleanup(struct scull_ring_buffer *buf) {
     kfree(buf->data);
 }
 
+// Helper function to find null terminator in circular buffer
+static int find_null_terminator(struct scull_ring_buffer *buf, int start_pos, int max_len) {
+    int pos = start_pos;
+    int bytes_checked = 0;
+    
+    while (bytes_checked < max_len && bytes_checked < buf->data_len) {
+        if (buf->data[pos] == '\0') {
+            return bytes_checked + 1; // Include the null terminator
+        }
+        pos = (pos + 1) % buf->size;
+        bytes_checked++;
+    }
+    return -1; // No null terminator found within max_len
+}
+
 static int scull_ring_buffer_read(struct scull_ring_buffer *buf, char __user *user_buf, size_t count) {
     int bytes_read = 0;
     int available;
     int to_end;
+    int message_len;
 
     if (mutex_lock_interruptible(&buf->lock)) {
         return -ERESTARTSYS;
@@ -102,31 +118,43 @@ static int scull_ring_buffer_read(struct scull_ring_buffer *buf, char __user *us
         }
     }
 
+    // Find the length of the first complete message (up to null terminator)
+    message_len = find_null_terminator(buf, buf->read_pos, buf->data_len);
+    if (message_len < 0) {
+        // No complete message found, read what we can
+        message_len = (count < buf->data_len) ? count : buf->data_len;
+    } else {
+        // We found a complete message, don't read more than the message length
+        if (message_len > count) {
+            message_len = count;
+        }
+    }
+
     available = buf->data_len;
-    if (count > available) {
-        count = available;
+    if (message_len > available) {
+        message_len = available;
     }
 
     to_end = buf->size - buf->read_pos;
-    if (count > to_end) {
+    if (message_len > to_end) {
         if (copy_to_user(user_buf, buf->data + buf->read_pos, to_end)) {
             mutex_unlock(&buf->lock);
             return -EFAULT;
         }
-        if (copy_to_user(user_buf + to_end, buf->data, count - to_end)) {
+        if (copy_to_user(user_buf + to_end, buf->data, message_len - to_end)) {
             mutex_unlock(&buf->lock);
             return -EFAULT;
         }
     } else {
-        if (copy_to_user(user_buf, buf->data + buf->read_pos, count)) {
+        if (copy_to_user(user_buf, buf->data + buf->read_pos, message_len)) {
             mutex_unlock(&buf->lock);
             return -EFAULT;
         }
     }
 
-    buf->read_pos = (buf->read_pos + count) % buf->size;
-    buf->data_len -= count;
-    bytes_read = count;
+    buf->read_pos = (buf->read_pos + message_len) % buf->size;
+    buf->data_len -= message_len;
+    bytes_read = message_len;
 
     atomic_inc(&buf->read_count);
     

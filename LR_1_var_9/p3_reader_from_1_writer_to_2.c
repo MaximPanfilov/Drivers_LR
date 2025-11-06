@@ -54,49 +54,38 @@ int main() {
            DEV_SCULL1, DEV_SCULL2);
 
     while (keep_running) {
-        // Read from scull1 - VERY SLOW (read 5 messages at once every 45 seconds)
+        // Read ONE message from scull1
         start_time = get_current_time_us();
         
-        // Read multiple messages if available
-        int messages_read = 0;
-        for (int i = 0; i < 5 && keep_running; i++) {
-            n = read(fd_read, read_buf, BUFFER_SIZE - 1);
-            
-            if (n < 0) {
-                perror("P3: Read from scull1 failed");
-                break;
-            } else if (n > 0) {
-                read_buf[n] = '\0';
-                messages_read++;
-                
-                printf("P3: Read from scull1: %s\n", read_buf);
-
-                // Write to scull2
-                start_time = get_current_time_us();
-                
-                int written = snprintf(write_buf, BUFFER_SIZE, "P3_FINAL_%d_%s", counter, read_buf);
-                if (written >= BUFFER_SIZE) {
-                    printf("P3: Warning: message truncated\n");
-                }
-                
-                n = write(fd_write, write_buf, strlen(write_buf) + 1);
-                
-                end_time = get_current_time_us();
-                
-                if (n < 0) {
-                    perror("P3: Write to scull2 failed");
-                } else {
-                    print_timing_info("P3-WRITE", "wrote to scull2", counter, end_time - start_time);
-                }
-                counter++;
-            } else {
-                break; // No more data available
-            }
-        }
+        n = read(fd_read, read_buf, BUFFER_SIZE - 1);
         
         end_time = get_current_time_us();
-        if (messages_read > 0) {
-            print_timing_info("P3-READ", "read batch from scull1", messages_read, end_time - start_time);
+        
+        if (n < 0) {
+            perror("P3: Read from scull1 failed");
+        } else if (n > 0) {
+            read_buf[n] = '\0'; // Ensure null termination
+            print_timing_info("P3-READ", "read from scull1", counter, end_time - start_time);
+            printf("    Content: %s\n", read_buf);
+
+            // Process and write to scull2
+            start_time = get_current_time_us();
+            
+            int written = snprintf(write_buf, BUFFER_SIZE, "P3_FINAL_%d_%s", counter, read_buf);
+            if (written >= BUFFER_SIZE) {
+                printf("P3: Warning: message truncated\n");
+            }
+            
+            n = write(fd_write, write_buf, strlen(write_buf) + 1);
+            
+            end_time = get_current_time_us();
+            
+            if (n < 0) {
+                perror("P3: Write to scull2 failed");
+            } else {
+                print_timing_info("P3-WRITE", "wrote to scull2", counter, end_time - start_time);
+            }
+            counter++;
         }
 
         sleep(45); // Read only every 45 seconds to let buffer fill up massively
