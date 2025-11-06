@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/lib/modules/$(shell uname -r)/build/include",
+                "/usr/src/linux-headers-$(shell uname -r)/include"
+            ],
+            "defines": [
+                "__KERNEL__",
+                "MODULE"
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "linux-gcc-x64",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "/lib/modules/$(shell uname -r)/build/include",
+                    "/usr/src/linux-headers-$(shell uname -r)/include"
+                ]
+            }
+        }
+    ],
+    "version": 4
+}
