@@ -33,6 +33,14 @@ pkill -f "p1"
 
 ./unload_driver.sh
 
+
+----[TIPS:]----
+make
+sudo insmod ./scull_ring.ko 
+sudo rmmod scull_ring 
+sudo lsmod //list of all modules
+We can load and unload module this way too
+
 ///////////////////////////////////////////////////////
 Лабораторная работа №1 Scull-драйвер с блокировками
 В рамках лабораторной работы необходимо разработать 2 (3 в некоторых вариантах) программы.

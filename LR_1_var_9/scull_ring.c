@@ -7,7 +7,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
-#include <linux/sched.h>
+#include <linux/sched.h> //
 #include <linux/ioctl.h>
 #include <linux/atomic.h>
 
@@ -15,9 +15,9 @@
 #define SCULL_RING_BUFFER_SIZE 1024
 #define SCULL_RING_NR_DEVS 3
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Your Name");
-MODULE_DESCRIPTION("Scull Ring Buffer Driver with Blocking IO and Atomic Counters");
+MODULE_LICENSE("GPL"); //[NOTE:] we need to specify (free) licence, or else we will see a warning 
+MODULE_AUTHOR("Maxim_Panfilov"); 
+MODULE_DESCRIPTION("Scull Driver for LR1");
 
 struct scull_ring_buffer {
     char *data;
@@ -275,6 +275,7 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
     return 0;
 }
 
+// __init shows that func will be "detached" after initialization 
 static int __init scull_ring_init(void) {
     dev_t dev = 0;
     int err, i;
@@ -287,7 +288,9 @@ static int __init scull_ring_init(void) {
         scull_ring_major = MAJOR(dev);
     }
     if (err < 0) {
-        printk(KERN_WARNING "scull_ring: can't get major %d\n", scull_ring_major);
+        printk(KERN_WARNING "scull_ring: can't get major %d\n", scull_ring_major); 
+        //[NOTE:] we use printk instead of printf 'cause core (kernel) do not use C libs
+        //[NOTE:] KERN_WARNING - mesg priority
         return err;
     }
 
@@ -317,6 +320,7 @@ static int __init scull_ring_init(void) {
     }
 
     printk(KERN_INFO "scull_ring: driver loaded with major %d\n", scull_ring_major);
+    printk(KERN_ALERT "The process is \"%s\" (pid %i) \n", current->comm, current->pid); //check with [sudo tail -f /var/log/syslog]
     return 0;
 
 fail:
@@ -329,6 +333,7 @@ fail:
     return err;
 }
 
+//return resourses
 static void __exit scull_ring_exit(void) {
     int i;
     dev_t dev = MKDEV(scull_ring_major, 0);
