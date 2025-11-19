@@ -7,7 +7,7 @@ For drivers course LR's
 
 2. ./load_driver.sh
 
-catch blocking messages
+catch blocking messages:
 sudo dmesg | grep "scull_ring"
 
 3. compile:
