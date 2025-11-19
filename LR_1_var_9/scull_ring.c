@@ -136,12 +136,14 @@ static int extract_messages(struct scull_ring_buffer *buf, char *output, int out
         bytes_processed += message_len;
         message_count++;
         
-        // Limit to 5 messages to avoid overflow
-        if (message_count >= 5) {
+        /*
+        // Limit to n messages to avoid overflow
+        if (message_count >= 19) {
             output_used += snprintf(output + output_used, output_size - output_used, 
                                   "...(%d more) ", (buf->data_len - bytes_processed) / 20);
             break;
         }
+        */
     }
     
     if (message_count == 0 && buf->data_len > 0) {
