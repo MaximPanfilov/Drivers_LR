@@ -45,7 +45,7 @@ static struct scull_ring_dev scull_ring_devices[SCULL_RING_NR_DEVS];
 
 #define SCULL_RING_IOCTL_GET_STATUS _IOR('s', 1, int[4])
 #define SCULL_RING_IOCTL_GET_COUNTERS _IOR('s', 2, long[2])
-#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[512])  // Increased size for formatted output
+#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[512])
 
 static int scull_ring_open(struct inode *inode, struct file *filp);
 static int scull_ring_release(struct inode *inode, struct file *filp);
@@ -100,56 +100,62 @@ static int find_null_terminator(struct scull_ring_buffer *buf, int start_pos, in
     return -1; // No null terminator found within max_len
 }
 
-// Helper function to extract individual messages for peeking
+// Show ALL messages in buffer
 static int extract_messages(struct scull_ring_buffer *buf, char *output, int output_size) {
     int pos = buf->read_pos;
     int bytes_processed = 0;
     int message_count = 0;
     int output_used = 0;
     
-    while (bytes_processed < buf->data_len && output_used < output_size - 50) {
+    if (buf->data_len == 0) {
+        snprintf(output, output_size, "Empty");
+        return 0;
+    }
+    
+    output_used += snprintf(output + output_used, output_size - output_used, "[");
+    
+    // Extract ALL messages
+    while (bytes_processed < buf->data_len && output_used < output_size - 20) {
         int message_len = find_null_terminator(buf, pos, buf->data_len - bytes_processed);
         if (message_len < 0) {
-            // No complete message found, show remaining data
+            // No complete message found, show remaining as hex
             int remaining = buf->data_len - bytes_processed;
             if (remaining > 0) {
-                output_used += snprintf(output + output_used, output_size - output_used, 
-                                      "[partial:%d] ", remaining);
+                /*output_used += snprintf(output + output_used, output_size - output_used, 
+                                      "partial:%dbytes", remaining); */
             }
             break;
         }
         
         // Extract the message
-        char message[50];
+        char message[20];
         int msg_bytes_copied = 0;
-        for (int i = 0; i < message_len - 1 && i < 49; i++) { // -1 to exclude null terminator
+        for (int i = 0; i < message_len - 1 && i < 19; i++) {
             message[i] = buf->data[(pos + i) % buf->size];
             msg_bytes_copied++;
+            
+            // Stop if we hit another null terminator (shouldn't happen in middle of message)
+            if (message[i] == '\0') break;
         }
         message[msg_bytes_copied] = '\0';
         
-        // Add to output
-        output_used += snprintf(output + output_used, output_size - output_used, 
-                              "%s ", message);
+        // Add to output with comma separator
+        if (message_count > 0) {
+            output_used += snprintf(output + output_used, output_size - output_used, ", ");
+        }
+        output_used += snprintf(output + output_used, output_size - output_used, "%s", message);
         
         pos = (pos + message_len) % buf->size;
         bytes_processed += message_len;
         message_count++;
-        
-        /*
-        // Limit to n messages to avoid overflow
-        if (message_count >= 19) {
-            output_used += snprintf(output + output_used, output_size - output_used, 
-                                  "...(%d more) ", (buf->data_len - bytes_processed) / 20);
-            break;
-        }
-        */
     }
     
-    if (message_count == 0 && buf->data_len > 0) {
-        snprintf(output, output_size, "[%d bytes, no null terminators]", buf->data_len);
-    } else if (message_count == 0) {
-        snprintf(output, output_size, "[empty]");
+    output_used += snprintf(output + output_used, output_size - output_used, "]");
+    
+    // If we couldn't show all due to buffer size
+    if (bytes_processed < buf->data_len) {
+        output_used += snprintf(output + output_used, output_size - output_used, 
+                              " +%db more", buf->data_len - bytes_processed);
     }
     
     return message_count;
@@ -161,18 +167,39 @@ static int scull_ring_buffer_read(struct scull_ring_buffer *buf, char __user *us
     int to_end;
     int message_len;
 
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) attempting to read from buffer\n", 
+           current->comm, current->pid);
+
     if (mutex_lock_interruptible(&buf->lock)) {
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while waiting for mutex lock (READ)\n", 
+               current->comm, current->pid);
         return -ERESTARTSYS;
     }
 
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) acquired mutex lock for reading\n", 
+           current->comm, current->pid);
+
+    // БЛОКИРОВКА 1: Читатель ждет данных (буфер пустой)
     while (buf->data_len == 0) {
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) BLOCKED - buffer empty, waiting for data (data_len=0)\n", 
+               current->comm, current->pid);
+        
         mutex_unlock(&buf->lock);
+        
         if (wait_event_interruptible(buf->read_queue, (buf->data_len > 0))) {
+            printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while waiting for data\n", 
+                   current->comm, current->pid);
             return -ERESTARTSYS;
         }
+        
         if (mutex_lock_interruptible(&buf->lock)) {
+            printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while re-acquiring mutex after wait\n", 
+                   current->comm, current->pid);
             return -ERESTARTSYS;
         }
+        
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) UNBLOCKED - data available (data_len=%d)\n", 
+               current->comm, current->pid, buf->data_len);
     }
 
     // Find the length of the first complete message (up to null terminator)
@@ -215,8 +242,14 @@ static int scull_ring_buffer_read(struct scull_ring_buffer *buf, char __user *us
 
     atomic_inc(&buf->read_count);
     
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) read %d bytes, waking up writers (new data_len=%d)\n", 
+           current->comm, current->pid, bytes_read, buf->data_len);
+    
     wake_up_interruptible(&buf->write_queue);
     mutex_unlock(&buf->lock);
+    
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) released mutex after reading\n", 
+           current->comm, current->pid);
     return bytes_read;
 }
 
@@ -225,23 +258,46 @@ static int scull_ring_buffer_write(struct scull_ring_buffer *buf, const char __u
     int available;
     int to_end;
 
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) attempting to write %zu bytes to buffer\n", 
+           current->comm, current->pid, count);
+
     if (mutex_lock_interruptible(&buf->lock)) {
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while waiting for mutex lock (WRITE)\n", 
+               current->comm, current->pid);
         return -ERESTARTSYS;
     }
 
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) acquired mutex lock for writing\n", 
+           current->comm, current->pid);
+
+    // БЛОКИРОВКА 2: Писатель ждет места (буфер полный)
     while (buf->data_len == buf->size) {
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) BLOCKED - buffer full, waiting for space (data_len=%d, size=%d)\n", 
+               current->comm, current->pid, buf->data_len, buf->size);
+        
         mutex_unlock(&buf->lock);
+        
         if (wait_event_interruptible(buf->write_queue, (buf->data_len < buf->size))) {
+            printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while waiting for buffer space\n", 
+                   current->comm, current->pid);
             return -ERESTARTSYS;
         }
+        
         if (mutex_lock_interruptible(&buf->lock)) {
+            printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while re-acquiring mutex after wait\n", 
+                   current->comm, current->pid);
             return -ERESTARTSYS;
         }
+        
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) UNBLOCKED - space available (data_len=%d)\n", 
+               current->comm, current->pid, buf->data_len);
     }
 
     available = buf->size - buf->data_len;
     if (count > available) {
         count = available;
+        printk(KERN_INFO "scull_ring: Process %s (pid %d) write truncated to %zu bytes (buffer almost full)\n", 
+               current->comm, current->pid, count);  // FIXED: %zu для size_t
     }
 
     to_end = buf->size - buf->write_pos;
@@ -267,8 +323,14 @@ static int scull_ring_buffer_write(struct scull_ring_buffer *buf, const char __u
 
     atomic_inc(&buf->write_count);
     
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) wrote %d bytes, waking up readers (new data_len=%d)\n", 
+           current->comm, current->pid, bytes_written, buf->data_len);
+    
     wake_up_interruptible(&buf->read_queue);
     mutex_unlock(&buf->lock);
+    
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) released mutex after writing\n", 
+           current->comm, current->pid);
     return bytes_written;
 }
 
@@ -278,10 +340,14 @@ static int scull_ring_open(struct inode *inode, struct file *filp) {
     dev = container_of(inode->i_cdev, struct scull_ring_dev, cdev);
     filp->private_data = dev;
     
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) opened device\n", 
+           current->comm, current->pid);
     return 0;
 }
 
 static int scull_ring_release(struct inode *inode, struct file *filp) {
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) closed device\n", 
+           current->comm, current->pid);
     return 0;
 }
 
@@ -300,12 +366,17 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
     struct scull_ring_buffer *buf = dev->ring_buf;
     int status[4];
     long counters[2];
-    char peek_buffer[512];  // Larger buffer for formatted output
+    char peek_buffer[512];
     int message_count;
+
+    printk(KERN_INFO "scull_ring: Process %s (pid %d) calling ioctl cmd=%u\n", 
+           current->comm, current->pid, cmd);
 
     switch (cmd) {
         case SCULL_RING_IOCTL_GET_STATUS:
             if (mutex_lock_interruptible(&buf->lock)) {
+                printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while waiting for mutex lock (IOCTL STATUS)\n", 
+                       current->comm, current->pid);
                 return -ERESTARTSYS;
             }
             status[0] = buf->data_len;
@@ -329,18 +400,23 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
             break;
             
         case SCULL_RING_IOCTL_PEEK_BUFFER:
+            // БЛОКИРОВКА 3: IOCTL ждет мьютекс
             if (mutex_lock_interruptible(&buf->lock)) {
+                printk(KERN_INFO "scull_ring: Process %s (pid %d) interrupted while waiting for mutex lock (IOCTL PEEK)\n", 
+                       current->comm, current->pid);
                 return -ERESTARTSYS;
             }
             
-            // Extract individual messages for display
-            if (buf->data_len > 0) {
-                message_count = extract_messages(buf, peek_buffer, sizeof(peek_buffer));
-            } else {
-                strcpy(peek_buffer, "[empty]");
-            }
+            printk(KERN_INFO "scull_ring: Process %s (pid %d) acquired mutex for ioctl peek\n", 
+                   current->comm, current->pid);
+            
+            // Show ALL messages in buffer
+            message_count = extract_messages(buf, peek_buffer, sizeof(peek_buffer));
             
             mutex_unlock(&buf->lock);
+            
+            printk(KERN_INFO "scull_ring: Process %s (pid %d) released mutex after ioctl peek\n", 
+                   current->comm, current->pid);
             
             if (copy_to_user((char __user *)arg, peek_buffer, sizeof(peek_buffer))) {
                 return -EFAULT;
@@ -396,7 +472,6 @@ static int __init scull_ring_init(void) {
 
     printk(KERN_INFO "scull_ring: driver loaded with major %d\n", scull_ring_major);
     printk(KERN_INFO "scull_ring: buffer size is %d bytes\n", SCULL_RING_BUFFER_SIZE);
-    printk(KERN_INFO "scull_ring: PEEK IOCTL available (cmd=10)\n");
     printk(KERN_ALERT "The process is \"%s\" (pid %i) \n", current->comm, current->pid);
     return 0;
 
