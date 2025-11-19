@@ -9,10 +9,9 @@
 #include <time.h>
 #include <errno.h>
 
-// MUST MATCH THE DRIVER - changed to 10
 #define SCULL_RING_IOCTL_GET_STATUS _IOR('s', 1, int[4])
 #define SCULL_RING_IOCTL_GET_COUNTERS _IOR('s', 2, long[2])
-#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[256])  // Changed to 10
+#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[512])
 
 #define DEV_SCULL0 "/dev/scull_ring0"
 #define DEV_SCULL1 "/dev/scull_ring1"
@@ -33,7 +32,7 @@ void print_timestamp() {
 void print_detailed_status(int fd, const char* dev_name, long *last_reads, long *last_writes, int dev_index) {
     int status[4];
     long counters[2];
-    char buffer_content[256];
+    char buffer_content[512];
     static int first_run[3] = {1, 1, 1};
     int ret;
     
@@ -41,7 +40,7 @@ void print_detailed_status(int fd, const char* dev_name, long *last_reads, long 
     ret = ioctl(fd, SCULL_RING_IOCTL_GET_STATUS, status);
     if (ret != 0) {
         print_timestamp();
-        printf("%s: Error reading status (errno=%d: %s)\n", dev_name, errno, strerror(errno));
+        printf("%s: Error reading status\n", dev_name);
         return;
     }
     
@@ -49,7 +48,7 @@ void print_detailed_status(int fd, const char* dev_name, long *last_reads, long 
     ret = ioctl(fd, SCULL_RING_IOCTL_GET_COUNTERS, counters);
     if (ret != 0) {
         print_timestamp();
-        printf("%s: Error reading counters (errno=%d: %s)\n", dev_name, errno, strerror(errno));
+        printf("%s: Error reading counters\n", dev_name);
         return;
     }
     
@@ -75,7 +74,6 @@ void print_detailed_status(int fd, const char* dev_name, long *last_reads, long 
             printf(" [R:+%ld W:+%ld]", read_diff, write_diff);
         }
         printf(" [Total:R%ld W%ld]\n", counters[0], counters[1]);
-        printf("    PEEK ERROR: errno=%d (%s)\n", errno, strerror(errno));
     } else {
         print_timestamp();
         printf("%s: Data=%d/%d (%.1f%%)", 
@@ -86,7 +84,7 @@ void print_detailed_status(int fd, const char* dev_name, long *last_reads, long 
             printf(" [R:+%ld W:+%ld]", read_diff, write_diff);
         }
         printf(" [Total:R%ld W%ld]\n", counters[0], counters[1]);
-        printf("    Content: %s\n", buffer_content);
+        printf("    Numbers: %s\n", buffer_content);
     }
     
     last_reads[dev_index] = counters[0];
@@ -109,12 +107,11 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("P4: Enhanced Monitor Started. Using PEEK IOCTL command 10\n");
-    printf("Press Ctrl+C to stop.\n\n");
+    printf("P4: Number Monitor Started. Press Ctrl+C to stop.\n\n");
 
     while (keep_running) {
         system("clear");
-        printf("=== Scull Ring Buffers - Enhanced Monitor (Iteration: %d) ===\n\n", iteration++);
+        printf("=== Number Flow Monitor (Iteration: %d) ===\n\n", iteration++);
         
         print_detailed_status(fd0, "scull0", last_reads, last_writes, 0);
         printf("\n");

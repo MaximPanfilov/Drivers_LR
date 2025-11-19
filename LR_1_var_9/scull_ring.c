@@ -43,10 +43,9 @@ module_param(scull_ring_major, int, S_IRUGO);
 
 static struct scull_ring_dev scull_ring_devices[SCULL_RING_NR_DEVS];
 
-// Use unique command numbers to avoid conflicts
 #define SCULL_RING_IOCTL_GET_STATUS _IOR('s', 1, int[4])
 #define SCULL_RING_IOCTL_GET_COUNTERS _IOR('s', 2, long[2])
-#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[256])  // Changed to 10
+#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[512])  // Increased size for formatted output
 
 static int scull_ring_open(struct inode *inode, struct file *filp);
 static int scull_ring_release(struct inode *inode, struct file *filp);
@@ -99,6 +98,59 @@ static int find_null_terminator(struct scull_ring_buffer *buf, int start_pos, in
         bytes_checked++;
     }
     return -1; // No null terminator found within max_len
+}
+
+// Helper function to extract individual messages for peeking
+static int extract_messages(struct scull_ring_buffer *buf, char *output, int output_size) {
+    int pos = buf->read_pos;
+    int bytes_processed = 0;
+    int message_count = 0;
+    int output_used = 0;
+    
+    while (bytes_processed < buf->data_len && output_used < output_size - 50) {
+        int message_len = find_null_terminator(buf, pos, buf->data_len - bytes_processed);
+        if (message_len < 0) {
+            // No complete message found, show remaining data
+            int remaining = buf->data_len - bytes_processed;
+            if (remaining > 0) {
+                output_used += snprintf(output + output_used, output_size - output_used, 
+                                      "[partial:%d] ", remaining);
+            }
+            break;
+        }
+        
+        // Extract the message
+        char message[50];
+        int msg_bytes_copied = 0;
+        for (int i = 0; i < message_len - 1 && i < 49; i++) { // -1 to exclude null terminator
+            message[i] = buf->data[(pos + i) % buf->size];
+            msg_bytes_copied++;
+        }
+        message[msg_bytes_copied] = '\0';
+        
+        // Add to output
+        output_used += snprintf(output + output_used, output_size - output_used, 
+                              "%s ", message);
+        
+        pos = (pos + message_len) % buf->size;
+        bytes_processed += message_len;
+        message_count++;
+        
+        // Limit to 5 messages to avoid overflow
+        if (message_count >= 5) {
+            output_used += snprintf(output + output_used, output_size - output_used, 
+                                  "...(%d more) ", (buf->data_len - bytes_processed) / 20);
+            break;
+        }
+    }
+    
+    if (message_count == 0 && buf->data_len > 0) {
+        snprintf(output, output_size, "[%d bytes, no null terminators]", buf->data_len);
+    } else if (message_count == 0) {
+        snprintf(output, output_size, "[empty]");
+    }
+    
+    return message_count;
 }
 
 static int scull_ring_buffer_read(struct scull_ring_buffer *buf, char __user *user_buf, size_t count) {
@@ -246,8 +298,8 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
     struct scull_ring_buffer *buf = dev->ring_buf;
     int status[4];
     long counters[2];
-    char peek_buffer[256];
-    int peek_len;
+    char peek_buffer[512];  // Larger buffer for formatted output
+    int message_count;
 
     switch (cmd) {
         case SCULL_RING_IOCTL_GET_STATUS:
@@ -279,32 +331,16 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
                 return -ERESTARTSYS;
             }
             
-            // Copy buffer content for peeking (without consuming)
-            peek_len = (buf->data_len < 256 - 1) ? buf->data_len : 256 - 1;
-            
-            if (peek_len > 0) {
-                int to_end = buf->size - buf->read_pos;
-                if (peek_len > to_end) {
-                    memcpy(peek_buffer, buf->data + buf->read_pos, to_end);
-                    memcpy(peek_buffer + to_end, buf->data, peek_len - to_end);
-                } else {
-                    memcpy(peek_buffer, buf->data + buf->read_pos, peek_len);
-                }
-                peek_buffer[peek_len] = '\0'; // Ensure null termination
-                
-                // Replace non-printable characters with dots for safety
-                for (int i = 0; i < peek_len; i++) {
-                    if (peek_buffer[i] < 32 || peek_buffer[i] > 126) {
-                        peek_buffer[i] = '.';
-                    }
-                }
+            // Extract individual messages for display
+            if (buf->data_len > 0) {
+                message_count = extract_messages(buf, peek_buffer, sizeof(peek_buffer));
             } else {
                 strcpy(peek_buffer, "[empty]");
             }
             
             mutex_unlock(&buf->lock);
             
-            if (copy_to_user((char __user *)arg, peek_buffer, 256)) {
+            if (copy_to_user((char __user *)arg, peek_buffer, sizeof(peek_buffer))) {
                 return -EFAULT;
             }
             break;

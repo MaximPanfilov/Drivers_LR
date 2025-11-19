@@ -12,6 +12,7 @@
 #define BUFFER_SIZE 512
 
 volatile sig_atomic_t keep_running = 1;
+int final_counter = 0;
 
 void signal_handler(int sig) {
     keep_running = 0;
@@ -23,16 +24,15 @@ long get_current_time_us() {
     return tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
-void print_timing_info(const char* process, const char* operation, int message_num, long elapsed_us) {
-    printf("[%ld] %s: %s message %d (took %ld us)\n", 
-           get_current_time_us(), process, operation, message_num, elapsed_us);
+void print_timing_info(const char* process, const char* operation, int number, long elapsed_us) {
+    printf("[%ld] %s: %s number %d (took %ld us)\n", 
+           get_current_time_us(), process, operation, number, elapsed_us);
 }
 
 int main() {
     int fd_read, fd_write;
     char read_buf[BUFFER_SIZE];
     char write_buf[BUFFER_SIZE];
-    int counter = 1;
     ssize_t n;
     long start_time, end_time;
 
@@ -55,7 +55,7 @@ int main() {
            DEV_SCULL1, DEV_SCULL2);
 
     while (keep_running) {
-        // Read ONE message from scull1 - 1x speed
+        // Read 1 number from scull1
         start_time = get_current_time_us();
         
         n = read(fd_read, read_buf, BUFFER_SIZE - 1);
@@ -65,19 +65,15 @@ int main() {
         if (n < 0) {
             perror("P3: Read from scull1 failed");
         } else if (n > 0) {
-            read_buf[n] = '\0'; // Ensure null termination
-            print_timing_info("P3-READ", "read from scull1", counter, end_time - start_time);
-            printf("    Content: %s\n", read_buf);
+            read_buf[n] = '\0';
+            int received_number = atoi(read_buf);
+            print_timing_info("P3-READ", "read from scull1", received_number, end_time - start_time);
 
-            // Process and write to scull2 - 2x faster than read
+            // Process and write 2 numbers to scull2
             for (int i = 0; i < 2 && keep_running; i++) {
                 start_time = get_current_time_us();
                 
-                int written = snprintf(write_buf, BUFFER_SIZE, "P3_FINAL_%d_%d_%s", counter, i, read_buf);
-                if (written >= BUFFER_SIZE) {
-                    printf("P3: Warning: message truncated\n");
-                }
-                
+                snprintf(write_buf, BUFFER_SIZE, "%d", final_counter);
                 n = write(fd_write, write_buf, strlen(write_buf) + 1);
                 
                 end_time = get_current_time_us();
@@ -85,10 +81,10 @@ int main() {
                 if (n < 0) {
                     perror("P3: Write to scull2 failed");
                 } else {
-                    print_timing_info("P3-WRITE", "wrote to scull2", counter * 100 + i, end_time - start_time);
+                    print_timing_info("P3-WRITE", "wrote to scull2", final_counter, end_time - start_time);
                 }
+                final_counter++;
             }
-            counter++;
         }
 
         usleep(1000000); // 1 second between iterations

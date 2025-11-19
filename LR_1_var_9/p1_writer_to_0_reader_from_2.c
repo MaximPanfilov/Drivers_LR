@@ -12,6 +12,7 @@
 #define BUFFER_SIZE 512
 
 volatile sig_atomic_t keep_running = 1;
+int number_counter = 0;
 
 void signal_handler(int sig) {
     keep_running = 0;
@@ -23,16 +24,15 @@ long get_current_time_us() {
     return tv.tv_sec * 1000000 + tv.tv_usec;
 }
 
-void print_timing_info(const char* process, const char* operation, int message_num, long elapsed_us) {
-    printf("[%ld] %s: %s message %d (took %ld us)\n", 
-           get_current_time_us(), process, operation, message_num, elapsed_us);
+void print_timing_info(const char* process, const char* operation, int number, long elapsed_us) {
+    printf("[%ld] %s: %s number %d (took %ld us)\n", 
+           get_current_time_us(), process, operation, number, elapsed_us);
 }
 
 int main() {
     int fd_write, fd_read;
     char write_buf[BUFFER_SIZE];
     char read_buf[BUFFER_SIZE];
-    int counter = 1;
     ssize_t n;
     long start_time, end_time;
 
@@ -51,15 +51,15 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("P1: Started (Writing to %s, Reading from %s). Press Ctrl+C to stop.\n", 
+    printf("P1: Started (Writing numbers to %s, Reading from %s). Press Ctrl+C to stop.\n", 
            DEV_SCULL0, DEV_SCULL2);
 
     while (keep_running) {
-        // Write to scull0 - 2x faster than read
+        // Write 2 numbers to scull0
         for (int i = 0; i < 2 && keep_running; i++) {
             start_time = get_current_time_us();
             
-            snprintf(write_buf, BUFFER_SIZE, "P1_DATA_%d_%d", counter, i);
+            snprintf(write_buf, BUFFER_SIZE, "%d", number_counter);
             n = write(fd_write, write_buf, strlen(write_buf) + 1);
             
             end_time = get_current_time_us();
@@ -67,11 +67,12 @@ int main() {
             if (n < 0) {
                 perror("P1: Write failed");
             } else {
-                print_timing_info("P1-WRITE", "wrote to scull0", counter * 100 + i, end_time - start_time);
+                print_timing_info("P1-WRITE", "wrote to scull0", number_counter, end_time - start_time);
             }
+            number_counter++;
         }
 
-        // Read from scull2 - 1x speed
+        // Read 1 number from scull2
         start_time = get_current_time_us();
         
         n = read(fd_read, read_buf, BUFFER_SIZE - 1);
@@ -82,12 +83,11 @@ int main() {
             perror("P1: Read from scull2 failed");
         } else if (n > 0) {
             read_buf[n] = '\0';
-            print_timing_info("P1-READ", "read from scull2", counter, end_time - start_time);
-            printf("    Content: %s\n", read_buf);
+            int received_number = atoi(read_buf);
+            print_timing_info("P1-READ", "read from scull2", received_number, end_time - start_time);
         }
 
-        counter++;
-        usleep(1000000); // 1 second between iterations
+        usleep(2000000); // 1 second between iterations
     }
 
     printf("P1: Shutting down...\n");
