@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -54,8 +55,8 @@ int main() {
            DEV_SCULL0, DEV_SCULL2);
 
     while (keep_running) {
-        // Write to scull0 - VERY FAST (10 messages in burst)
-        for (int i = 0; i < 10 && keep_running; i++) {
+        // Write to scull0 - 2x faster than read
+        for (int i = 0; i < 2 && keep_running; i++) {
             start_time = get_current_time_us();
             
             snprintf(write_buf, BUFFER_SIZE, "P1_DATA_%d_%d", counter, i);
@@ -70,25 +71,23 @@ int main() {
             }
         }
 
-        // Read from scull2 (occasionally)
-        if (counter % 5 == 0) { // Read only every 5th iteration
-            start_time = get_current_time_us();
-            
-            n = read(fd_read, read_buf, BUFFER_SIZE - 1);
-            
-            end_time = get_current_time_us();
-            
-            if (n < 0) {
-                perror("P1: Read from scull2 failed");
-            } else if (n > 0) {
-                read_buf[n] = '\0';
-                print_timing_info("P1-READ", "read from scull2", counter, end_time - start_time);
-                printf("    Content: %s\n", read_buf);
-            }
+        // Read from scull2 - 1x speed
+        start_time = get_current_time_us();
+        
+        n = read(fd_read, read_buf, BUFFER_SIZE - 1);
+        
+        end_time = get_current_time_us();
+        
+        if (n < 0) {
+            perror("P1: Read from scull2 failed");
+        } else if (n > 0) {
+            read_buf[n] = '\0';
+            print_timing_info("P1-READ", "read from scull2", counter, end_time - start_time);
+            printf("    Content: %s\n", read_buf);
         }
 
         counter++;
-        usleep(500000); // 0.5 seconds between bursts
+        usleep(1000000); // 1 second between iterations
     }
 
     printf("P1: Shutting down...\n");

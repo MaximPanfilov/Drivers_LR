@@ -35,12 +35,18 @@ pkill -f "p1"
 
 
 ----[TIPS:]----
+LDD-3 page 74 quite usefull
+sudo tail -f /var/log/syslog
+cat /proc/devices
+
 make
 sudo insmod ./scull_ring.ko 
 sudo rmmod scull_ring 
 sudo lsmod //list of all modules
 We can load and unload module this way too
 
+ls -l in /dev directory will show higher and lower device number. The higher one must identificate driver, associated with device 
+the lower one helps us to know which device is it
 ///////////////////////////////////////////////////////
 Лабораторная работа №1 Scull-драйвер с блокировками
 В рамках лабораторной работы необходимо разработать 2 (3 в некоторых вариантах) программы.
@@ -57,7 +63,7 @@ We can load and unload module this way too
 клавиатуры/ считывать из файла и отправлять данные в драйвер. Также по заданию или 
 выбору пользователя считывает данные из драйвера (возможно создание двух разных программ) 
 и выводит их на экран.
-Вариант:
+--Вариант 9:--
 В драйвере данные хранятся в кольцевом буфере.  В лабораторной работе необходимо создать 
 три драйвера и четыре процесса. Первый процесс будет писать в первый драйвер 
 поточно-генерируемую информацию, при этом считывать (извлекать) информацию из третьего 

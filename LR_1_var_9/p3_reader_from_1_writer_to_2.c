@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -54,7 +55,7 @@ int main() {
            DEV_SCULL1, DEV_SCULL2);
 
     while (keep_running) {
-        // Read ONE message from scull1
+        // Read ONE message from scull1 - 1x speed
         start_time = get_current_time_us();
         
         n = read(fd_read, read_buf, BUFFER_SIZE - 1);
@@ -68,27 +69,29 @@ int main() {
             print_timing_info("P3-READ", "read from scull1", counter, end_time - start_time);
             printf("    Content: %s\n", read_buf);
 
-            // Process and write to scull2
-            start_time = get_current_time_us();
-            
-            int written = snprintf(write_buf, BUFFER_SIZE, "P3_FINAL_%d_%s", counter, read_buf);
-            if (written >= BUFFER_SIZE) {
-                printf("P3: Warning: message truncated\n");
-            }
-            
-            n = write(fd_write, write_buf, strlen(write_buf) + 1);
-            
-            end_time = get_current_time_us();
-            
-            if (n < 0) {
-                perror("P3: Write to scull2 failed");
-            } else {
-                print_timing_info("P3-WRITE", "wrote to scull2", counter, end_time - start_time);
+            // Process and write to scull2 - 2x faster than read
+            for (int i = 0; i < 2 && keep_running; i++) {
+                start_time = get_current_time_us();
+                
+                int written = snprintf(write_buf, BUFFER_SIZE, "P3_FINAL_%d_%d_%s", counter, i, read_buf);
+                if (written >= BUFFER_SIZE) {
+                    printf("P3: Warning: message truncated\n");
+                }
+                
+                n = write(fd_write, write_buf, strlen(write_buf) + 1);
+                
+                end_time = get_current_time_us();
+                
+                if (n < 0) {
+                    perror("P3: Write to scull2 failed");
+                } else {
+                    print_timing_info("P3-WRITE", "wrote to scull2", counter * 100 + i, end_time - start_time);
+                }
             }
             counter++;
         }
 
-        sleep(45); // Read only every 45 seconds to let buffer fill up massively
+        usleep(1000000); // 1 second between iterations
     }
 
     printf("P3: Shutting down...\n");

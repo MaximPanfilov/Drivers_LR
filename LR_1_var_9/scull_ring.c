@@ -1,3 +1,4 @@
+
 // scull_ring.c
 #include <linux/module.h>
 #include <linux/init.h>
@@ -7,15 +8,15 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
-#include <linux/sched.h> //
+#include <linux/sched.h>
 #include <linux/ioctl.h>
 #include <linux/atomic.h>
 
 #define DEVICE_NAME "scull_ring"
-#define SCULL_RING_BUFFER_SIZE 1024
+#define SCULL_RING_BUFFER_SIZE 256
 #define SCULL_RING_NR_DEVS 3
 
-MODULE_LICENSE("GPL"); //[NOTE:] we need to specify (free) licence, or else we will see a warning 
+MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Maxim_Panfilov"); 
 MODULE_DESCRIPTION("Scull Driver for LR1");
 
@@ -42,8 +43,10 @@ module_param(scull_ring_major, int, S_IRUGO);
 
 static struct scull_ring_dev scull_ring_devices[SCULL_RING_NR_DEVS];
 
+// Use unique command numbers to avoid conflicts
 #define SCULL_RING_IOCTL_GET_STATUS _IOR('s', 1, int[4])
 #define SCULL_RING_IOCTL_GET_COUNTERS _IOR('s', 2, long[2])
+#define SCULL_RING_IOCTL_PEEK_BUFFER _IOWR('s', 10, char[256])  // Changed to 10
 
 static int scull_ring_open(struct inode *inode, struct file *filp);
 static int scull_ring_release(struct inode *inode, struct file *filp);
@@ -243,6 +246,8 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
     struct scull_ring_buffer *buf = dev->ring_buf;
     int status[4];
     long counters[2];
+    char peek_buffer[256];
+    int peek_len;
 
     switch (cmd) {
         case SCULL_RING_IOCTL_GET_STATUS:
@@ -269,13 +274,47 @@ static long scull_ring_ioctl(struct file *filp, unsigned int cmd, unsigned long 
             }
             break;
             
+        case SCULL_RING_IOCTL_PEEK_BUFFER:
+            if (mutex_lock_interruptible(&buf->lock)) {
+                return -ERESTARTSYS;
+            }
+            
+            // Copy buffer content for peeking (without consuming)
+            peek_len = (buf->data_len < 256 - 1) ? buf->data_len : 256 - 1;
+            
+            if (peek_len > 0) {
+                int to_end = buf->size - buf->read_pos;
+                if (peek_len > to_end) {
+                    memcpy(peek_buffer, buf->data + buf->read_pos, to_end);
+                    memcpy(peek_buffer + to_end, buf->data, peek_len - to_end);
+                } else {
+                    memcpy(peek_buffer, buf->data + buf->read_pos, peek_len);
+                }
+                peek_buffer[peek_len] = '\0'; // Ensure null termination
+                
+                // Replace non-printable characters with dots for safety
+                for (int i = 0; i < peek_len; i++) {
+                    if (peek_buffer[i] < 32 || peek_buffer[i] > 126) {
+                        peek_buffer[i] = '.';
+                    }
+                }
+            } else {
+                strcpy(peek_buffer, "[empty]");
+            }
+            
+            mutex_unlock(&buf->lock);
+            
+            if (copy_to_user((char __user *)arg, peek_buffer, 256)) {
+                return -EFAULT;
+            }
+            break;
+            
         default:
             return -ENOTTY;
     }
     return 0;
 }
 
-// __init shows that func will be "detached" after initialization 
 static int __init scull_ring_init(void) {
     dev_t dev = 0;
     int err, i;
@@ -288,9 +327,7 @@ static int __init scull_ring_init(void) {
         scull_ring_major = MAJOR(dev);
     }
     if (err < 0) {
-        printk(KERN_WARNING "scull_ring: can't get major %d\n", scull_ring_major); 
-        //[NOTE:] we use printk instead of printf 'cause core (kernel) do not use C libs
-        //[NOTE:] KERN_WARNING - mesg priority
+        printk(KERN_WARNING "scull_ring: can't get major %d\n", scull_ring_major);
         return err;
     }
 
@@ -320,7 +357,9 @@ static int __init scull_ring_init(void) {
     }
 
     printk(KERN_INFO "scull_ring: driver loaded with major %d\n", scull_ring_major);
-    printk(KERN_ALERT "The process is \"%s\" (pid %i) \n", current->comm, current->pid); //check with [sudo tail -f /var/log/syslog]
+    printk(KERN_INFO "scull_ring: buffer size is %d bytes\n", SCULL_RING_BUFFER_SIZE);
+    printk(KERN_INFO "scull_ring: PEEK IOCTL available (cmd=10)\n");
+    printk(KERN_ALERT "The process is \"%s\" (pid %i) \n", current->comm, current->pid);
     return 0;
 
 fail:
@@ -333,7 +372,6 @@ fail:
     return err;
 }
 
-//return resourses
 static void __exit scull_ring_exit(void) {
     int i;
     dev_t dev = MKDEV(scull_ring_major, 0);
