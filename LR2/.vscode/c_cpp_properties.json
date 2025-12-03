@@ -1,0 +1,30 @@
+{
+    "configurations": [
+        {
+            "name": "Linux Kernel",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/usr/src/linux-headers-6.14.0-36-generic/include",
+                "/usr/src/linux-headers-6.14.0-36-generic/arch/x86/include",
+                "/usr/src/linux-headers-6.14.0-36-generic/arch/x86/include/generated",
+                "/lib/modules/6.14.0-36-generic/build/include",
+                "/lib/modules/6.14.0-36-generic/build/arch/x86/include",
+                "/lib/modules/6.14.0-36-generic/build/arch/x86/include/generated",
+                "/usr/include"
+            ],
+            "defines": [
+                "__KERNEL__",
+                "MODULE",
+                "__GNUC__",
+                "DEBUG",
+                "CONFIG_X86",
+                "KBUILD_MODNAME=\"\\\"netstat_driver\\\"\""
+            ],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "gnu11",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "gcc-x64"
+        }
+    ],
+    "version": 4
+}

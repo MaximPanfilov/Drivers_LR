@@ -1,0 +1,12 @@
+{
+    "C_Cpp.default.configurationProvider": "ms-vscode.makefile-tools",
+    "C_Cpp.intelliSenseEngineFallback": "enabled",
+    "C_Cpp.autocomplete": "default",
+    "files.associations": {
+        "*.c": "c",
+        "*.h": "c"
+    },
+    "terminal.integrated.env.linux": {
+        "PATH": "/usr/bin:${env:PATH}"
+    }
+}

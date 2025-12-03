@@ -8,7 +8,7 @@ For drivers course LR's
 2. ./load_driver.sh
 
 catch blocking messages:
-sudo dmesg | grep "scull_ring"
+sudo dmesg -w | grep --line-buffered "scull_ring"
 
 3. compile:
 gcc -o p1 p1_writer_to_0_reader_from_2.c
