@@ -1,4 +1,3 @@
-
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
@@ -14,12 +13,11 @@
 #define DEVICE_NAME "entropy_mouse"  
 #define CLASS_NAME "entropy"         
 #define POOL_SIZE 256                // Размер пула энтропии (256 байт)
-#define MIN_ENTROPY_BITS 8          // Минимальное количество бит энтропии перед чтением
 
 MODULE_LICENSE("GPL");            
 MODULE_AUTHOR("Maxim Panfilov");    
 MODULE_DESCRIPTION("Mouse entropy collector driver");  
-MODULE_VERSION("3.0");              
+MODULE_VERSION("4.0");              // Обновляем версию
 
 // Глобальные переменные драйвера
 static int major_num;                 // Старший номер устройства 
@@ -29,11 +27,11 @@ static struct cdev entropy_cdev;     // Структура символьног�
 
 /*
  * Структура состояния драйвера.
+ * УПРОЩЕННАЯ: без счетчика энтропии
  */
 struct entropy_state {
     unsigned char pool[POOL_SIZE];   // Пул энтропии (256 байт)
     int pool_index;                  // Текущая позиция в пуле
-    unsigned int entropy_count;      // Счетчик бит энтропии (оценка)
     spinlock_t lock;                 // Спинлок для синхронизации доступа к пулу
     struct input_handler input_handler;  // Обработчик событий ввода (мыши)
     int mouse_events;                // Счетчик событий мыши для статистики
@@ -65,81 +63,61 @@ static struct file_operations fops = {
 
 /*
  * Таблица идентификаторов устройств ввода.
- * Определяет, к каким устройствам подключаться.
- * Используем два фильтра:
- * 1. Устройства, генерирующие события относительного движения (EV_REL) - мыши
- * 2. Устройства, генерирующие события клавиш (EV_KEY) - кнопки мыши
  */
 static const struct input_device_id entropy_ids[] = {
-    {
-        .flags = INPUT_DEVICE_ID_MATCH_EVBIT,  // Фильтр по типам событий
-        .evbit = { BIT_MASK(EV_REL) },         // События относительного движения (движение мыши)
-    },
+    // Устройства с относительным движением (мыши, тачпады)
     {
         .flags = INPUT_DEVICE_ID_MATCH_EVBIT,
-        .evbit = { BIT_MASK(EV_KEY) },         // События клавиш (клики мыши)
+        .evbit = { BIT_MASK(EV_REL) },
     },
-    { }, // Завершающий элемент (обязательно)
+    // Устройства с кнопками мыши (на всякий случай)
+    {
+        .flags = INPUT_DEVICE_ID_MATCH_KEYBIT,
+        .keybit = { [BIT_WORD(BTN_LEFT)] = BIT_MASK(BTN_LEFT) },
+    },
+    { },
 };
-
 /*
  * Обработчик событий мыши.
- * Вызывается каждый раз, когда мышь генерирует событие.
- * Эта функция собирает энтропию из событий мыши.
  */
 static void entropy_event(struct input_handle *handle, unsigned int type,
                          unsigned int code, int value)
 {
-    unsigned long flags;              // Флаги для сохранения состояния прерываний
-    static unsigned int event_counter = 0;  // Статический счетчик событий для отладки
+    unsigned long flags;
+    static unsigned int event_counter = 0;
     
-    // Проверяем, инициализирован ли state
     if (!state) return;
     
-    event_counter++;  // Увеличиваем счетчик событий
+    event_counter++;
     
-    // Логируем все события для отладки
+    if (type == 0) {
+        return;  // Не добавляем энтропию из SYN events
+    }
+    
+    // Логируем только интересные события
     printk(KERN_DEBUG "entropy_mouse: Event #%u: type=%u code=%u value=%d\n",
            event_counter, type, code, value);
     
-    /*
-     * Блокируем спинлок для безопасного доступа к общим данным.
-     * spin_lock_irqsave сохраняет текущее состояние прерываний.
-     * Это нужно, чтобы событие могло прервать выполнение в любом месте.
-     */
+    // Блокируем спинлок для безопасного доступа
     spin_lock_irqsave(&state->lock, flags);
     
     /*
-     * Добавляем энтропию в пул:
-     * 1. type - тип события (движение или клик)
-     * 2. code - код события (REL_X для движения по X)
-     * 3. value - значение события (величина движения)
-     * 4. jiffies - текущее время системы (добавляет случайность)
-     * 
-     * Используем операцию XOR для смешивания битов.
-     * Каждый байт маскируется 0xFF для взятия только младшего байта.
+     * Добавляем энтропию в пул.
+     * Используем XOR для смешивания битов.
      */
     state->pool[state->pool_index] ^= (type & 0xFF);
     state->pool[state->pool_index] ^= (code & 0xFF);
     state->pool[state->pool_index] ^= (value & 0xFF);
-    state->pool[state->pool_index] ^= (jiffies & 0xFF);
     
     // Перемещаем индекс по кругу (циклический буфер)
     state->pool_index = (state->pool_index + 1) % POOL_SIZE;
-    state->mouse_events++;  // Увеличиваем счетчик событий
-    
-    /*
-     * Увеличиваем счетчик энтропии.
-     * простая эвристика: 8 бит (1 байт) энтропии на событие.
-     */
-    state->entropy_count += 8;
+    state->mouse_events++;  // Увеличиваем счетчик событий для статистики
     
     /*
      * Простое перемешивание пула.
-     * Выполняем каждые 8 событий для лучшего распределения энтропии.
-     * Проходим по всему пулу и XOR'им каждый элемент со следующим.
+     * Выполняем каждые 16 событий для лучшего распределения энтропии.
      */
-    if (state->pool_index % 8 == 0) {
+    if (state->pool_index % 16 == 0) {
         int i;
         for (i = 0; i < POOL_SIZE - 1; i++) {
             state->pool[i] ^= state->pool[i + 1];
@@ -150,69 +128,62 @@ static void entropy_event(struct input_handle *handle, unsigned int type,
         }
     }
     
-    // Разблокируем спинлок и восстанавливаем состояние прерываний
+    // Разблокируем спинлок
     spin_unlock_irqrestore(&state->lock, flags);
     
-    // Логируем успешное добавление энтропии
-    printk(KERN_INFO "entropy_mouse: Added entropy from mouse event. Total events: %d, entropy: %u bits\n",
-           state->mouse_events, state->entropy_count);
+    // Логируем добавление данных
+    printk(KERN_INFO "entropy_mouse: Added data from mouse event. Total events: %d\n",
+           state->mouse_events);
 }
 
 /*
  * Функция подключения к устройству ввода.
- * Вызывается, когда ядро находит устройство, соответствующее нашим фильтрам.
  */
 static int entropy_connect(struct input_handler *handler,
                           struct input_dev *dev,
                           const struct input_device_id *id)
 {
-    struct input_handle *handle;  // Структура для связи с устройством
-    int error;                    // Код ошибки
+    struct input_handle *handle;
+    int error;
     
-    printk(KERN_INFO "entropy_mouse: CONNECTING to: %s (EV bits: %lx)\n", 
-           dev->name, dev->evbit[0]);
+    printk(KERN_INFO "entropy_mouse: Connecting to: %s\n", dev->name);
     
-    // Выделяем память для handle
     handle = kzalloc(sizeof(struct input_handle), GFP_KERNEL);
     if (!handle)
-        return -ENOMEM;  // Ошибка: не хватило памяти
+        return -ENOMEM;
     
-    // Настраиваем handle
-    handle->dev = dev;              // Указатель на устройство
-    handle->handler = handler;      // Наш обработчик
-    handle->name = "entropy_mouse"; // Имя для отладки
+    handle->dev = dev;
+    handle->handler = handler;
+    handle->name = "entropy_mouse";
     
-    // Регистрируем handle в подсистеме ввода
     error = input_register_handle(handle);
     if (error) {
         printk(KERN_ERR "entropy_mouse: Failed to register handle: %d\n", error);
-        kfree(handle);  // Освобождаем память
+        kfree(handle);
         return error;
     }
     
-    // Открываем устройство для получения событий
     error = input_open_device(handle);
     if (error) {
         printk(KERN_ERR "entropy_mouse: Failed to open device: %d\n", error);
-        input_unregister_handle(handle);  // Отменяем регистрацию
-        kfree(handle);                    // Освобождаем память
+        input_unregister_handle(handle);
+        kfree(handle);
         return error;
     }
     
-    printk(KERN_INFO "entropy_mouse: SUCCESSFULLY connected to %s\n", dev->name);
-    return 0;  // Успех
+    printk(KERN_INFO "entropy_mouse: Successfully connected to %s\n", dev->name);
+    return 0;
 }
 
 /*
  * Функция отключения от устройства ввода.
- * Вызывается при отключении устройства или выгрузке драйвера.
  */
 static void entropy_disconnect(struct input_handle *handle)
 {
     printk(KERN_INFO "entropy_mouse: Disconnecting from %s\n", handle->dev->name);
-    input_close_device(handle);      // Закрываем устройство
-    input_unregister_handle(handle); // Отменяем регистрацию
-    kfree(handle);                   // Освобождаем память
+    input_close_device(handle);
+    input_unregister_handle(handle);
+    kfree(handle);
 }
 
 /*
@@ -220,10 +191,9 @@ static void entropy_disconnect(struct input_handle *handle)
  */
 static int device_open(struct inode *inode, struct file *file)
 {
-    // Просто логируем открытие устройства
-    printk(KERN_INFO "entropy_mouse: Device opened (entropy: %u bits)\n", 
-           state ? state->entropy_count : 0);
-    return 0;  // Всегда успех
+    printk(KERN_INFO "entropy_mouse: Device opened (total events: %d)\n", 
+           state ? state->mouse_events : 0);
+    return 0;
 }
 
 /*
@@ -232,263 +202,210 @@ static int device_open(struct inode *inode, struct file *file)
 static int device_release(struct inode *inode, struct file *file)
 {
     printk(KERN_INFO "entropy_mouse: Device closed\n");
-    return 0;  // Всегда успех
+    return 0;
 }
 
 /*
  * Функция чтения из устройства.
- * Возвращает случайные данные, собранные из событий мыши.
  */
 static ssize_t device_read(struct file *filp, char __user *buffer,
                           size_t length, loff_t *offset)
 {
-    unsigned char *temp_buf;     // Временный буфер в ядре
-    unsigned long flags;         // Флаги для спинлока
-    ssize_t bytes_to_read;       // Сколько байт будем читать
-    int i;                       // Счетчик цикла
+    unsigned char *temp_buf;
+    unsigned long flags;
+    ssize_t bytes_to_read;
+    int i;
     
-    // Проверяем, инициализирован ли state
     if (!state) {
         printk(KERN_ERR "entropy_mouse: No state!\n");
-        return -ENODEV;  // Ошибка: устройство не существует
+        return -ENODEV;
     }
     
     // Блокируем доступ к пулу
     spin_lock_irqsave(&state->lock, flags);
     
-    
     // Ограничиваем размер запроса размером пула
     if (length > POOL_SIZE)
         length = POOL_SIZE;
     
-    // Проверяем нулевой запрос
     if (length == 0) {
         spin_unlock_irqrestore(&state->lock, flags);
-        return 0;  // Ничего не читаем
+        return 0;
     }
     
-    bytes_to_read = length;  // Определяем, сколько будем читать
+    bytes_to_read = length;
     
-    /*
-     * Важно: выделяем память вне спинлока!
-     * kmalloc может спать (вызывать планировщик), а спинлоки нельзя держать долго.
-     */
-    
+
     temp_buf = kmalloc(bytes_to_read, GFP_KERNEL);
     if (!temp_buf) {
-        return -ENOMEM;  // Ошибка: не хватило памяти
+        return -ENOMEM;
     }
     
     
     // Копируем данные из пула во временный буфер
     for (i = 0; i < bytes_to_read; i++) {
         temp_buf[i] = state->pool[state->pool_index];
-        state->pool_index = (state->pool_index + 1) % POOL_SIZE;  // Двигаем индекс
+        state->pool_index = (state->pool_index + 1) % POOL_SIZE;
     }
-    
     
     spin_unlock_irqrestore(&state->lock, flags);
     
-    /*
-     * Копируем данные из ядра в пользовательское пространство.
-     * copy_to_user проверяет валидность указателя пользователя.
-     */
+    // Копируем в пользовательское пространство
     if (copy_to_user(buffer, temp_buf, bytes_to_read)) {
-        kfree(temp_buf);  // Освобождаем память
-        return -EFAULT;   // Ошибка: неверный адрес в пользовательском пространстве
+        kfree(temp_buf);
+        return -EFAULT;
     }
     
-    kfree(temp_buf);  // Освобождаем временный буфер
+    kfree(temp_buf);
     
-    printk(KERN_INFO "entropy_mouse: Read %zd bytes (events: %d, entropy left: %u)\n", 
-           bytes_to_read, state->mouse_events, state->entropy_count);
-    return bytes_to_read;  // Возвращаем количество прочитанных байт
+    printk(KERN_INFO "entropy_mouse: Read %zd bytes (total events: %d)\n", 
+           bytes_to_read, state->mouse_events);
+    return bytes_to_read;
 }
 
 /*
  * Функция инициализации модуля.
- * Вызывается при загрузке модуля (insmod).
- * Макрос __init указывает, что функция используется только при инициализации.
  */
 static int __init entropy_driver_init(void)
 {
-    int retval;    // Переменная для кодов возврата
-    dev_t dev_num; // Номер устройства (старший + младший)
+    int retval;
+    dev_t dev_num;
     
-    printk(KERN_INFO "entropy_mouse: Initializing driver (DEBUG VERSION)...\n");
+    printk(KERN_INFO "entropy_mouse: Initializing driver (Simplified version 4.0)...\n");
     
-    /*
-     * 1. Выделяем память для состояния драйвера.
-     * kzalloc выделяет и обнуляет память.
-     * GFP_KERNEL - флаг
-     */
+    // Выделяем память для состояния драйвера
     state = kzalloc(sizeof(struct entropy_state), GFP_KERNEL);
     if (!state) {
         printk(KERN_ERR "entropy_mouse: Failed to allocate state\n");
-        return -ENOMEM;  // Ошибка выделения памяти
+        return -ENOMEM;
     }
     
-    /*
-     * 2. Инициализируем состояние драйвера.
-     */
-    spin_lock_init(&state->lock);          // Инициализируем спинлок
-    state->pool_index = 0;                 // Начинаем с начала пула
-    state->entropy_count = MIN_ENTROPY_BITS;  // Начальное значение энтропии
-    state->mouse_events = 0;               // Пока событий не было
+    // Инициализируем состояние драйвера
+    spin_lock_init(&state->lock);
+    state->pool_index = 0;
+    state->mouse_events = 0;
     
-    // 3. Заполняем пул начальными случайными данными
+    // Заполняем пул начальными случайными данными
     get_random_bytes(state->pool, POOL_SIZE);
     
-    /*
-     * 4. Настраиваем обработчик событий ввода.
-     * Указываем функции-обработчики для разных событий.
-     */
-    state->input_handler.event = entropy_event;      // Обработчик событий мыши
-    state->input_handler.connect = entropy_connect;  // Подключение к устройству
-    state->input_handler.disconnect = entropy_disconnect;  // Отключение
-    state->input_handler.name = "entropy_mouse";     // Имя обработчика
-    state->input_handler.id_table = entropy_ids;     // Таблица фильтров устройств
+    // Настраиваем обработчик событий ввода
+    state->input_handler.event = entropy_event;
+    state->input_handler.connect = entropy_connect;
+    state->input_handler.disconnect = entropy_disconnect;
+    state->input_handler.name = "entropy_mouse";
+    state->input_handler.id_table = entropy_ids;
     
-    // 5. Регистрируем обработчик в подсистеме ввода
+    // Регистрируем обработчик в подсистеме ввода
     retval = input_register_handler(&state->input_handler);
     if (retval) {
         printk(KERN_ERR "entropy_mouse: Failed to register input handler: %d\n", retval);
-        goto free_state;  // Переходим к очистке
+        goto free_state;
     }
     
-    /*
-     * 6. Регистрируем символьное устройство.
-     * alloc_chrdev_region выделяет диапазон номеров устройств.
-     * Параметры: &dev_num (возвращаемый номер), 0 (начальный минор),
-     *            1 (сколько миноров), DEVICE_NAME (имя).
-     */
+    // Регистрируем символьное устройство
     retval = alloc_chrdev_region(&dev_num, 0, 1, DEVICE_NAME);
     if (retval < 0) {
         printk(KERN_ERR "entropy_mouse: Failed to allocate device number\n");
-        goto unregister_handler;  // Очистка: отмена регистрации обработчика
+        goto unregister_handler;
     }
     
-    major_num = MAJOR(dev_num);  // Сохраняем старший номер
+    major_num = MAJOR(dev_num);
     
-    /*
-     * 7. Инициализируем структуру символьного устройства (cdev).
-     * cdev_init связывает cdev с файловыми операциями.
-     */
+    // Инициализируем cdev
     cdev_init(&entropy_cdev, &fops);
-    entropy_cdev.owner = THIS_MODULE;  // Владелец модуля
+    entropy_cdev.owner = THIS_MODULE;
     
-    /*
-     * 8. Добавляем cdev в систему.
-     * cdev_add делает устройство доступным в системе.
-     */
+    // Добавляем cdev в систему
     retval = cdev_add(&entropy_cdev, dev_num, 1);
     if (retval < 0) {
         printk(KERN_ERR "entropy_mouse: Failed to add cdev\n");
-        goto unregister_chrdev;  // Очистка: освобождение номера устройства
+        goto unregister_chrdev;
     }
     
-    /*
-     * 9. Создаем класс устройства в sysfs.
-     * Класс создает директорию в /sys/class/.
-     */
+    // Создаем класс устройства в sysfs
     entropy_class = class_create(CLASS_NAME);
     if (IS_ERR(entropy_class)) {
         retval = PTR_ERR(entropy_class);
         printk(KERN_ERR "entropy_mouse: Failed to create class\n");
-        goto del_cdev;  // Очистка: удаление cdev
+        goto del_cdev;
     }
     
-    /*
-     * 10. Создаем само устройство в sysfs.
-     * device_create создает файл устройства и связывает с классом.
-     */
+    // Создаем само устройство в sysfs
     entropy_device = device_create(entropy_class, NULL, dev_num, 
                                    NULL, DEVICE_NAME);
     if (IS_ERR(entropy_device)) {
         retval = PTR_ERR(entropy_device);
         printk(KERN_ERR "entropy_mouse: Failed to create device\n");
-        goto destroy_class;  // Очистка: удаление класса
+        goto destroy_class;
     }
     
-    // 11. Успешная инициализация
-    printk(KERN_INFO "entropy_mouse: DEBUG Driver initialized (major: %d)\n", major_num);
+    printk(KERN_INFO "entropy_mouse: Driver initialized (major: %d)\n", major_num);
     printk(KERN_INFO "entropy_mouse: Device: /dev/%s\n", DEVICE_NAME);
-    printk(KERN_INFO "entropy_mouse: Initial entropy: %u bits\n", state->entropy_count);
+    printk(KERN_INFO "entropy_mouse: Pool size: %d bytes\n", POOL_SIZE);
     
-    return 0;  // Успех
+    return 0;
 
 /*
- * Метки для отката (rollback) при ошибках.
- * Выполняются в обратном порядке инициализации.
+ * Откат при ошибках (ROLLBACK)
  */
 destroy_class:
-    class_destroy(entropy_class);  // Удаляем класс
+    class_destroy(entropy_class);
 del_cdev:
-    cdev_del(&entropy_cdev);       // Удаляем cdev
+    cdev_del(&entropy_cdev);
 unregister_chrdev:
-    unregister_chrdev_region(dev_num, 1);  // Освобождаем номер устройства
+    unregister_chrdev_region(dev_num, 1);
 unregister_handler:
-    input_unregister_handler(&state->input_handler);  // Отменяем регистрацию обработчика
+    input_unregister_handler(&state->input_handler);
 free_state:
-    kfree(state);  // Освобождаем память состояния
-    state = NULL;  // Обнуляем указатель
+    kfree(state);
+    state = NULL;
     
-    return retval;  // Возвращаем код ошибки
+    return retval;
 }
 
 /*
  * Функция выгрузки модуля.
- * Вызывается при выгрузке модуля (rmmod).
- * Макрос __exit указывает, что функция используется только при выгрузке.
  */
 static void __exit entropy_driver_exit(void)
 {
-    // Создаем номер устройства из сохраненного старшего номера
     dev_t dev_num = MKDEV(major_num, 0);
     
-    printk(KERN_INFO "entropy_mouse: Unloading DEBUG driver...\n");
+    printk(KERN_INFO "entropy_mouse: Unloading driver...\n");
     
-    // 1. Отменяем регистрацию обработчика ввода
+    // Отменяем регистрацию обработчика ввода
     input_unregister_handler(&state->input_handler);
     
-    // 2. Удаляем устройство из sysfs
+    // Удаляем устройство из sysfs
     if (entropy_device) {
         device_destroy(entropy_class, dev_num);
     }
     
-    // 3. Удаляем класс из sysfs
+    // Удаляем класс из sysfs
     if (entropy_class) {
         class_destroy(entropy_class);
     }
     
-    // 4. Удаляем символьное устройство из системы
+    // Удаляем символьное устройство из системы
     cdev_del(&entropy_cdev);
     
-    // 5. Освобождаем номер устройства
+    // Освобождаем номер устройства
     unregister_chrdev_region(dev_num, 1);
     
-    // 6. Освобождаем состояние драйвера
+    // Освобождаем состояние драйвера
     if (state) {
-        /*
-         * Важно: очищаем чувствительные данные (пул энтропии).
-         * memset гарантирует, что случайные данные не останутся в памяти.
-         */
+        // Очищаем чувствительные данные
         memset(state->pool, 0, POOL_SIZE);
         
         // Выводим статистику
-        printk(KERN_INFO "entropy_mouse: Total mouse events captured: %d\n", state->mouse_events);
+        printk(KERN_INFO "entropy_mouse: Total mouse events captured: %d\n", 
+               state->mouse_events);
         
-        kfree(state);  // Освобождаем память
-        state = NULL;  // Обнуляем указатель
+        kfree(state);
+        state = NULL;
     }
     
-    printk(KERN_INFO "entropy_mouse: DEBUG Driver unloaded\n");
+    printk(KERN_INFO "entropy_mouse: Driver unloaded\n");
 }
 
-/*
- * Макросы для указания функций инициализации и выгрузки.
- * module_init указывает функцию, вызываемую при загрузке модуля.
- * module_exit указывает функцию, вызываемую при выгрузке модуля.
- */
 module_init(entropy_driver_init);
 module_exit(entropy_driver_exit);
